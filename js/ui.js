@@ -200,6 +200,7 @@ const UI = (() => {
         <div>プレイ時間: ${CFFormatDuration(state.playTimeSec)}</div>
         <div>PERFECT: ${fmt(h.perfect)} / GOOD: ${fmt(h.good)} / OK: ${fmt(h.ok)} / MISS: ${fmt(h.miss)}</div>
         <div>黄金クッキー獲得: ${fmt(h.golden)}</div>
+        <div>ニセモノ見切り: ${fmt(h.fakeAvoided || 0)} / タップミス: ${fmt(h.fakeMistake || 0)}</div>
         <div>最大コンボ: ${fmt(state.maxCombo)}</div>
         <div>生涯クッキー: ${fmt(state.lifetimeDough)}🍪</div>
       </div>

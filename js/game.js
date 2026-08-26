@@ -5,7 +5,7 @@ function createInitialState() {
     dough: 0,
     lifetimeDough: 0,
     bestLifetimeDough: 0, // リボーンをまたいで保持(黄金の種銭計算用)
-    totalHits: { perfect: 0, good: 0, ok: 0, miss: 0, golden: 0 },
+    totalHits: { perfect: 0, good: 0, ok: 0, miss: 0, golden: 0, fakeAvoided: 0, fakeMistake: 0 },
     combo: 0,
     maxCombo: 0,
     shieldCharges: 0,
@@ -244,6 +244,18 @@ function getMagnetBonus(state) {
   return lv * 0.02 + tree.magnetBonus;
 }
 
+// BPM変化(テンポの変動)の振れ幅をどれだけ弱めるか。0=そのまま、1=完全に無効化
+function getBpmStabilizer(state) {
+  const lv = getRhythmUpgLevel(state, 'bpmstable');
+  return Math.min(0.75, lv * 0.15);
+}
+
+// ニセクッキー(認識難)の出現率をどれだけ下げるか
+function getFakeChanceReduction(state) {
+  const lv = getRhythmUpgLevel(state, 'fakesense');
+  return lv * 0.015;
+}
+
 function getHitYieldBase(state) {
   let base = 1;
   for (const b of BUILDINGS) base += getBuildingCount(state, b.id) * 0.02; // 建物が増えるほど1タップの価値も上がる
@@ -289,6 +301,21 @@ function registerHit(state, tier, isGolden) {
   state.lifetimeDough += gained;
   state.bestLifetimeDough = Math.max(state.bestLifetimeDough, state.lifetimeDough);
   return { gained, crit };
+}
+
+// ニセクッキー(認識難)への対応を記録する。tapped=trueならタップミス(コンボ減点)、
+// falseなら正しく見切って放置できた(ボーナスなし、実績のみ)。
+function registerFakeNote(state, tapped) {
+  if (tapped) {
+    if (state.shieldCharges > 0) {
+      state.shieldCharges--;
+    } else {
+      state.combo = 0;
+    }
+    state.totalHits.fakeMistake = (state.totalHits.fakeMistake || 0) + 1;
+  } else {
+    state.totalHits.fakeAvoided = (state.totalHits.fakeAvoided || 0) + 1;
+  }
 }
 
 function addDough(state, amount) {

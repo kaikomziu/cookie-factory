@@ -3,9 +3,26 @@ const HIT_ZONE_PROGRESS = 0.82;
 const MAX_LANES = 5;
 const BASE_SPAWN_MS = 900;
 
+// ===== BPM変化(テンポの波)=====
+// 一定時間ごとにテンポが速くなったり遅くなったりする。速い間は判定が厳しくなり、
+// 遅い間は楽になる「息継ぎ」区間になる。リズムセンサー強化で振れ幅を弱められる。
+const BPM_PHASES = [
+  { type: 'normal', dur: 16000 },
+  { type: 'high', dur: 7000 },
+  { type: 'normal', dur: 16000 },
+  { type: 'low', dur: 7000 }
+];
+const BPM_CYCLE_TOTAL = BPM_PHASES.reduce((a, p) => a + p.dur, 0);
+const BPM_PROFILE = {
+  normal: { travelMult: 1, spawnMult: 1, bpm: 120, label: null },
+  high: { travelMult: 0.62, spawnMult: 0.72, bpm: 185, label: '⚡ BPM UP! テンポが速くなった!' },
+  low: { travelMult: 1.4, spawnMult: 1.3, bpm: 75, label: '🐢 BPM DOWN テンポがゆっくりに…' }
+};
+
 const RhythmEngine = (() => {
   let state = null;
   let container = null;
+  let bannerEl = null;
   let lanes = []; // { el, trackEl, notes: [], spawnTimer }
   let rafId = null;
   let lastTs = null;
@@ -13,6 +30,8 @@ const RhythmEngine = (() => {
   let onHit = () => {};
   let onAchievements = () => {};
   let laneCount = 1;
+  let bpmClock = 0;
+  let currentPhase = 'normal';
   const keyToLane = { 'a': 0, 's': 1, 'd': 2, 'f': 3, 'g': 4, ' ': 0 };
 
   function init(rootEl, gameState, callbacks) {
@@ -20,6 +39,7 @@ const RhythmEngine = (() => {
     state = gameState;
     onHit = callbacks.onHit || (() => {});
     onAchievements = callbacks.onAchievements || (() => {});
+    bannerEl = document.getElementById('bpm-banner');
     document.addEventListener('keydown', handleKeydown);
     rebuildLanes();
   }
@@ -61,16 +81,24 @@ const RhythmEngine = (() => {
     }
   }
 
+  function getFakeChance() {
+    let base = 0.05;
+    if (currentPhase === 'high') base += 0.05;
+    const reduction = getFakeChanceReduction(state);
+    return Math.max(0, Math.min(0.35, base - reduction));
+  }
+
   function spawnNote(laneIdx) {
     const lane = lanes[laneIdx];
     const tree = getTreeBonuses(state);
     const isGolden = tree.goldenCookieUnlocked && Math.random() < 0.012;
+    const isFake = !isGolden && Math.random() < getFakeChance();
     const el = document.createElement('div');
-    el.className = 'note' + (isGolden ? ' note-golden' : '');
+    el.className = 'note' + (isGolden ? ' note-golden' : '') + (isFake ? ' note-fake' : '');
     el.textContent = isGolden ? '🌟' : '🍪';
     lane.trackEl.appendChild(el);
-    const autoRoll = Math.random() < getAutoHitChance(state);
-    lane.notes.push({ progress: 0, el, golden: isGolden, judged: false, autoRoll });
+    const autoRoll = !isFake && Math.random() < getAutoHitChance(state);
+    lane.notes.push({ progress: 0, el, golden: isGolden, fake: isFake, judged: false, autoRoll });
   }
 
   function judgeTier(state, dist) {
@@ -95,6 +123,7 @@ const RhythmEngine = (() => {
     const w = getJudgeWindows(state);
     const magnet = getMagnetBonus(state);
     if (bestDist > w.ok + magnet) return; // 範囲外は無反応(空振りペナルティなし)
+    if (best.fake) { finishFakeNote(lane, best, true); return; } // ニセモノは判定に関わらずタップ即ミス
     const tier = judgeTier(state, bestDist);
     if (!tier) return;
     finishNote(lane, best, tier);
@@ -107,6 +136,23 @@ const RhythmEngine = (() => {
     note.el.remove();
     lane.notes = lane.notes.filter(n => n !== note);
     onHit(tier, result.gained, result.crit, note.golden);
+    const newly = checkAchievements(state);
+    if (newly.length) onAchievements(newly);
+  }
+
+  // tapped=true: ニセクッキーをタップしてしまった(コンボ減点) / false: 触れずに正しく見切った
+  function finishFakeNote(lane, note, tapped) {
+    note.judged = true;
+    registerFakeNote(state, tapped);
+    if (tapped) {
+      showFakeJudgment(lane, note);
+      note.el.classList.add('note-fake-hit');
+    } else {
+      note.el.classList.add('note-fake-passed');
+    }
+    setTimeout(() => note.el.remove(), tapped ? 250 : 200);
+    lane.notes = lane.notes.filter(n => n !== note);
+    onHit(tapped ? 'fakeMistake' : 'fakeAvoided', 0, false, false);
     const newly = checkAchievements(state);
     if (newly.length) onAchievements(newly);
   }
@@ -124,13 +170,59 @@ const RhythmEngine = (() => {
     setTimeout(() => label.remove(), 700);
   }
 
+  function showFakeJudgment(lane, note) {
+    const label = document.createElement('div');
+    label.className = 'judge-float judge-fake';
+    label.textContent = '⚠️ ニセモノ!';
+    const rect = note.el.getBoundingClientRect();
+    const trackRect = lane.trackEl.getBoundingClientRect();
+    label.style.left = (rect.left - trackRect.left) + 'px';
+    lane.trackEl.appendChild(label);
+    requestAnimationFrame(() => label.classList.add('judge-float-anim'));
+    setTimeout(() => label.remove(), 700);
+  }
+
+  function getPhaseAt(clockMs) {
+    const t = clockMs % BPM_CYCLE_TOTAL;
+    let acc = 0;
+    for (const p of BPM_PHASES) {
+      acc += p.dur;
+      if (t < acc) return p.type;
+    }
+    return 'normal';
+  }
+
+  function updateBpmBanner(phase) {
+    if (!bannerEl) return;
+    container.classList.toggle('bpm-high', phase === 'high');
+    container.classList.toggle('bpm-low', phase === 'low');
+    const profile = BPM_PROFILE[phase];
+    if (!profile.label) {
+      bannerEl.classList.add('hidden');
+      return;
+    }
+    bannerEl.textContent = profile.label;
+    bannerEl.className = 'bpm-banner bpm-banner-' + phase;
+  }
+
   function loop(ts) {
     if (!running) return;
     if (lastTs === null) lastTs = ts;
     let dt = ts - lastTs;
     lastTs = ts;
     dt = Math.min(dt, 100); // タブ復帰時の巨大dt対策
-    const travelMs = getTravelMs(state);
+
+    bpmClock += dt;
+    const phase = getPhaseAt(bpmClock);
+    if (phase !== currentPhase) {
+      currentPhase = phase;
+      updateBpmBanner(phase);
+    }
+    const profile = BPM_PROFILE[phase];
+    const stabilizer = getBpmStabilizer(state);
+    const travelMult = 1 + (profile.travelMult - 1) * (1 - stabilizer);
+    const spawnMult = 1 + (profile.spawnMult - 1) * (1 - stabilizer);
+    const travelMs = getTravelMs(state) * travelMult;
     const w = getJudgeWindows(state);
     const magnet = getMagnetBonus(state);
 
@@ -138,7 +230,7 @@ const RhythmEngine = (() => {
       lane.spawnTimer -= dt;
       if (lane.spawnTimer <= 0) {
         spawnNote(lanes.indexOf(lane));
-        lane.spawnTimer = BASE_SPAWN_MS + (Math.random() * 200 - 100);
+        lane.spawnTimer = BASE_SPAWN_MS * spawnMult + (Math.random() * 200 - 100);
       }
       for (const note of lane.notes.slice()) {
         note.progress += dt / travelMs;
@@ -149,6 +241,10 @@ const RhythmEngine = (() => {
             continue;
           }
           if (note.progress > HIT_ZONE_PROGRESS + w.ok + magnet) {
+            if (note.fake) {
+              finishFakeNote(lane, note, false);
+              continue;
+            }
             note.judged = true;
             registerHit(state, 'miss', false);
             note.el.classList.add('note-missed');

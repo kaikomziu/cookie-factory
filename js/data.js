@@ -56,6 +56,18 @@ const RHYTHM_UPGRADES = [
     baseCost: 1200, costScale: 8,
     desc: (lv) => `MISS圏内でもOK判定に引き上げる範囲+ (Lv${lv}/3)`,
     effectDesc: 'ギリギリ外れたタイミングでも、砂糖の魔力でOK判定に引き寄せられる。'
+  },
+  {
+    id: 'bpmstable', name: 'リズムセンサー', emoji: '🎚️', maxLevel: 5,
+    baseCost: 600, costScale: 6,
+    desc: (lv) => `BPM変動の振れ幅を軽減 (Lv${lv}/5)`,
+    effectDesc: 'テンポが速く/遅くなる「BPM変化」の影響を弱め、リズムを安定させる。'
+  },
+  {
+    id: 'fakesense', name: '本物センサー', emoji: '🔍', maxLevel: 3,
+    baseCost: 900, costScale: 8,
+    desc: (lv) => `ニセクッキーの出現率を軽減 (Lv${lv}/3)`,
+    effectDesc: '本物そっくりの「ニセクッキー(焦げクッキー)」が紛れ込む確率を下げる。'
   }
 ];
 
@@ -109,6 +121,10 @@ function generateAchievements() {
   // リボーン回数
   [1, 3, 5, 10, 20].forEach(m => {
     list.push({ id: 'reborn_' + m, emoji: '🔁', name: `リボーン${m}回`, desc: `${m}回リボーンする`, check: s => s.reborn.count >= m, bonus: 0.02 });
+  });
+  // ニセクッキー回避数(認識難)
+  [20, 100, 500, 2000].forEach(m => {
+    list.push({ id: 'fake_' + m, emoji: '🔍', name: `ニセモノ見切り${m}回`, desc: `ニセクッキーを${m}回見抜いて避ける`, check: s => (s.totalHits.fakeAvoided || 0) >= m, bonus: 0.01 });
   });
   return list;
 }
